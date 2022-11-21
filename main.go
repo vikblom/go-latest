@@ -1,0 +1,79 @@
+// go-latest tries to upgrade programs go install-d to GOBIN.
+//
+// For reference, go itself:
+// ./src/cmd/go/internal/version/version.go
+// ./src/cmd/go/internal/work/build.go
+package main
+
+import (
+	"context"
+	"debug/buildinfo"
+	"fmt"
+	"io/fs"
+	"io/ioutil"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+)
+
+func bin() string {
+	// TODO: Check how go does this.
+	gobin := os.Getenv("GOBIN")
+	if gobin == "" {
+		return "/home/viktor/go/bin"
+	}
+	return gobin
+}
+
+func listPrograms(dir string) ([]string, error) {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var programs []string
+	for _, fi := range files {
+		if isExecutable(fi) {
+			programs = append(programs, filepath.Join(dir, fi.Name()))
+		}
+	}
+	return programs, nil
+}
+
+func isExecutable(fi fs.FileInfo) bool {
+	return fi.Mode().Perm()&0111 != 0
+}
+
+func latest(ctx context.Context) error {
+	progs, err := listPrograms(bin())
+	if err != nil {
+		return err
+	}
+
+	for _, f := range progs {
+		// TODO: Is it faster to combine packages from the same module into a single exec?
+		info, err := buildinfo.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, "go", "install", info.Path+"@latest")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("go install failed (%s):\n%s", err, out)
+		}
+		// TODO: If no longer present in module, ask if remove?
+	}
+
+	return nil
+}
+
+func main() {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	err := latest(ctx)
+	if err != nil {
+		fmt.Printf("refresh: %s", err)
+		os.Exit(1)
+	}
+}
