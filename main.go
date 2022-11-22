@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"debug/buildinfo"
+	"errors"
 	"fmt"
 	"io/fs"
 	"io/ioutil"
@@ -17,13 +18,16 @@ import (
 	"path/filepath"
 )
 
-func bin() string {
-	// TODO: Check how go does this.
+func gobin() string {
 	gobin := os.Getenv("GOBIN")
-	if gobin == "" {
-		return "/home/viktor/go/bin"
+	if gobin != "" {
+		return gobin
 	}
-	return gobin
+	home := os.Getenv("HOME")
+	if home != "" {
+		return filepath.Join(home, "go", "bin")
+	}
+	return ""
 }
 
 func listPrograms(dir string) ([]string, error) {
@@ -45,7 +49,11 @@ func isExecutable(fi fs.FileInfo) bool {
 }
 
 func latest(ctx context.Context) error {
-	progs, err := listPrograms(bin())
+	dir := gobin()
+	if dir == "" {
+		return errors.New("GOBIN not found")
+	}
+	progs, err := listPrograms(dir)
 	if err != nil {
 		return err
 	}
