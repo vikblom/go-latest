@@ -9,6 +9,7 @@ import (
 	"context"
 	"debug/buildinfo"
 	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"io/ioutil"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 )
 
 func gobin() string {
@@ -81,13 +83,33 @@ func latest(ctx context.Context) error {
 	return nil
 }
 
-func main() {
+func runMain() error {
+	showVersion := flag.Bool("v", false, "print version")
+	flag.Parse()
+
+	if *showVersion {
+		bi, ok := debug.ReadBuildInfo()
+		if !ok {
+			return errors.New("could not read buildinfo")
+		}
+		fmt.Println(bi.Main.Version)
+		return nil
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	err := latest(ctx)
 	if err != nil {
-		fmt.Printf("refresh: %s", err)
+		return err
+	}
+	return nil
+}
+
+func main() {
+	err := runMain()
+	if err != nil {
+		fmt.Printf("%s", err.Error())
 		os.Exit(1)
 	}
 }
