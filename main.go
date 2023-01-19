@@ -72,6 +72,8 @@ func latest(ctx context.Context) error {
 		if info.Main.Version == "(devel)" {
 			continue
 		}
+		// TODO: Also skip if installed at specific SHA.
+
 		cmd := exec.CommandContext(ctx, "go", "install", info.Path+"@latest")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
