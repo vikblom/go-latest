@@ -64,6 +64,12 @@ func latest(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// TODO: Print "pkg before -> after"
+		fmt.Printf("%s %s\n", info.Path, info.Main.Version)
+
+		if info.Main.Version == "(devel)" {
+			continue
+		}
 		cmd := exec.CommandContext(ctx, "go", "install", info.Path+"@latest")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
