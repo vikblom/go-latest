@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"debug/buildinfo"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,7 +19,17 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+
+	"golang.org/x/mod/semver"
 )
+
+// NOTES:
+// golang.org/x/mod/semver
+// golang.org/x/mod/module
+//
+// Use:
+// go list -m -json golang.org/x/tools/gopls@latest
+// either on each pkg or on the module.
 
 func gobin() string {
 	gobin := os.Getenv("GOBIN")
@@ -50,7 +61,36 @@ func isExecutable(fi fs.FileInfo) bool {
 	return fi.Mode().Perm()&0111 != 0
 }
 
-func latest(ctx context.Context) error {
+// isSpecific revision installed like from local repo or a specific SHA.
+func isSpecific(v string) bool {
+	// Local
+	if v == "(devel)" {
+		return true
+	}
+	// Specific SHA or otherwise not a "clean" version.
+	if semver.IsValid(v) && semver.Prerelease(v) != "" {
+		return true
+	}
+	return false
+}
+
+func latest(ctx context.Context, pkg string) (string, error) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", pkg+"@latest")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("go list (%s):\n%s", err, out)
+	}
+	listing := struct {
+		Version string
+	}{}
+	err = json.Unmarshal(out, &listing)
+	if err != nil {
+		return "", fmt.Errorf("json unmarshal: %v", err)
+	}
+	return listing.Version, nil
+}
+
+func installer(ctx context.Context) error {
 	dir := gobin()
 	if dir == "" {
 		return errors.New("GOBIN not found")
@@ -61,25 +101,34 @@ func latest(ctx context.Context) error {
 	}
 
 	for _, f := range progs {
-		// TODO: Is it faster to combine packages from the same module into a single exec?
 		info, err := buildinfo.ReadFile(f)
 		if err != nil {
 			return err
 		}
-		// TODO: Print "pkg before -> after"
-		fmt.Printf("%s %s\n", info.Path, info.Main.Version)
-
-		if info.Main.Version == "(devel)" {
+		if isSpecific(info.Main.Version) {
+			fmt.Printf("%s %s skip\n", info.Path, info.Main.Version)
 			continue
 		}
-		// TODO: Also skip if installed at specific SHA.
-
+		// Latest available is checked per module.
+		// TODO: Cache this lookup.
+		target, err := latest(ctx, info.Main.Path)
+		if err != nil {
+			fmt.Printf("%s\n", err)
+			// TODO: Doesn't work for golang.org/x/tools/cmd/auth/authtest
+			target = "?"
+		}
+		if info.Main.Version == target {
+			// fmt.Printf("%s %s already latest\n", info.Path, info.Main.Version)
+			continue
+		}
+		fmt.Printf("%s %s -> %s\n", info.Path, info.Main.Version, target)
+		// TODO: Is it faster to combine packages from the same module into a single exec?
 		cmd := exec.CommandContext(ctx, "go", "install", info.Path+"@latest")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("go install failed (%s):\n%s", err, out)
+			return fmt.Errorf("go install (%s):\n%s", err, out)
 		}
-		// TODO: If no longer present in module, ask if remove?
+		// TODO: If no longer present in module or deprecated, ask if remove?
 	}
 
 	return nil
@@ -101,7 +150,7 @@ func runMain() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	err := latest(ctx)
+	err := installer(ctx)
 	if err != nil {
 		return err
 	}
