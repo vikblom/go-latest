@@ -18,9 +18,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 
 	"golang.org/x/mod/semver"
+	"golang.org/x/sync/errgroup"
 )
 
 // NOTES:
@@ -100,38 +102,51 @@ func installer(ctx context.Context) error {
 		return err
 	}
 
+	var eg errgroup.Group
+	eg.SetLimit(runtime.NumCPU())
+
 	for _, f := range progs {
-		info, err := buildinfo.ReadFile(f)
-		if err != nil {
-			return err
-		}
-		if isSpecific(info.Main.Version) {
-			fmt.Printf("%s %s skip\n", info.Path, info.Main.Version)
-			continue
-		}
-		// Latest available is checked per module.
-		// TODO: Cache this lookup.
-		target, err := latest(ctx, info.Main.Path)
-		if err != nil {
-			fmt.Printf("%s\n", err)
-			// TODO: Doesn't work for golang.org/x/tools/cmd/auth/authtest
-			target = "?"
-		}
-		if info.Main.Version == target {
-			// fmt.Printf("%s %s already latest\n", info.Path, info.Main.Version)
-			continue
-		}
-		fmt.Printf("%s %s -> %s\n", info.Path, info.Main.Version, target)
-		// TODO: Is it faster to combine packages from the same module into a single exec?
-		cmd := exec.CommandContext(ctx, "go", "install", info.Path+"@latest")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("go install (%s):\n%s", err, out)
-		}
-		// TODO: If no longer present in module or deprecated, ask if remove?
+		ff := f
+		eg.Go(func() error {
+			info, err := buildinfo.ReadFile(ff)
+			if err != nil {
+				return err
+			}
+			if isSpecific(info.Main.Version) {
+				fmt.Printf("%s %s skip\n", info.Path, info.Main.Version)
+				return nil
+			}
+
+			// Latest available is checked per module.
+			// TODO: Cache this lookup.
+			target, err := latest(ctx, info.Main.Path)
+			if err != nil {
+				fmt.Printf("%s\n", err)
+				// TODO: Doesn't work for golang.org/x/tools/cmd/auth/authtest
+				target = "?"
+			}
+
+			goUpgrade := runtime.Version() != info.GoVersion
+			modUpgrade := target != info.Main.Version
+			if !goUpgrade && !modUpgrade {
+				fmt.Printf("%s %s already latest\n", info.Path, info.Main.Version)
+				return nil
+			}
+			fmt.Printf("%s %s -> %s\n", info.Path, info.Main.Version, target)
+
+			// TODO: Is it faster to combine packages from the same module into a single exec?
+			cmd := exec.CommandContext(ctx, "go", "install", info.Path+"@latest")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("go install (%s):\n%s", err, out)
+			}
+			// TODO: If no longer present in module or deprecated, ask if remove?
+			return nil
+		})
+
 	}
 
-	return nil
+	return eg.Wait()
 }
 
 func runMain() error {
