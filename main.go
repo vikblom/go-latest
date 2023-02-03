@@ -63,7 +63,8 @@ func isExecutable(fi fs.FileInfo) bool {
 	return fi.Mode().Perm()&0111 != 0
 }
 
-// isSpecific revision installed like from local repo or a specific SHA.
+// isSpecific revision installed from local repo or a specific SHA.
+// In other words not some generally available package installed with @latest.
 func isSpecific(v string) bool {
 	// Local
 	if v == "(devel)" {
@@ -76,6 +77,7 @@ func isSpecific(v string) bool {
 	return false
 }
 
+// latest version of package, or error.
 func latest(ctx context.Context, pkg string) (string, error) {
 	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", pkg+"@latest")
 	out, err := cmd.CombinedOutput()
@@ -92,7 +94,7 @@ func latest(ctx context.Context, pkg string) (string, error) {
 	return listing.Version, nil
 }
 
-func installer(ctx context.Context) error {
+func installer(ctx context.Context, nProcs int, latestGo bool) error {
 	dir := gobin()
 	if dir == "" {
 		return errors.New("GOBIN not found")
@@ -103,7 +105,7 @@ func installer(ctx context.Context) error {
 	}
 
 	var eg errgroup.Group
-	eg.SetLimit(runtime.NumCPU())
+	eg.SetLimit(nProcs)
 
 	for _, f := range progs {
 		ff := f
@@ -126,7 +128,7 @@ func installer(ctx context.Context) error {
 				target = "?"
 			}
 
-			goUpgrade := runtime.Version() != info.GoVersion
+			goUpgrade := latestGo && runtime.Version() != info.GoVersion
 			modUpgrade := target != info.Main.Version
 			if !goUpgrade && !modUpgrade {
 				fmt.Printf("%s %s already latest\n", info.Path, info.Main.Version)
@@ -149,8 +151,21 @@ func installer(ctx context.Context) error {
 	return eg.Wait()
 }
 
+const help = `Usage: go-latest [options]
+
+Install the latest version of go install'd programs in GOBIN.
+
+Options:
+`
+
 func runMain() error {
-	showVersion := flag.Bool("v", false, "print version")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), help)
+		flag.PrintDefaults()
+	}
+	showVersion := flag.Bool("v", false, "Print version and exit")
+	nProcs := flag.Int("j", 0, "Number of parallel workers, defaults to number of CPUs")
+	latestGo := flag.Bool("go", false, "Re-install programs not built with the current version of Go")
 	flag.Parse()
 
 	if *showVersion {
@@ -161,11 +176,13 @@ func runMain() error {
 		fmt.Println(bi.Main.Version)
 		return nil
 	}
+	if *nProcs == 0 {
+		*nProcs = runtime.NumCPU()
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-
-	err := installer(ctx)
+	err := installer(ctx, *nProcs, *latestGo)
 	if err != nil {
 		return err
 	}

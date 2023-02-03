@@ -17,10 +17,14 @@ go install github.com/vikblom/go-latest@latest
 
 ## Usage
 ```
-# Inspect
-go-latest -h
-go-latest -v
+Usage: go-latest [options]
 
-# Update programs
-go-latest
+Install the latest version of go install'd programs in GOBIN.
+
+Options:
+  -go
+        Re-install programs not built with the current version of Go
+  -j int
+        Number of parallel workers, defaults to number of CPUs
+  -v    Print version and exit
 ```
