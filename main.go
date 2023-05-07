@@ -82,7 +82,7 @@ func latest(ctx context.Context, pkg string) (string, error) {
 	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-json", pkg+"@latest")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("go list (%s):\n%s", err, out)
+		return "", fmt.Errorf("go list (%w):\n%s", err, out)
 	}
 	listing := struct {
 		Version string
@@ -123,6 +123,9 @@ func installer(ctx context.Context, nProcs int, latestGo bool) error {
 			// TODO: Cache this lookup.
 			target, err := latest(ctx, info.Main.Path)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
 				fmt.Printf("%s\n", err)
 				// TODO: Doesn't work for golang.org/x/tools/cmd/auth/authtest
 				target = "?"
@@ -182,7 +185,17 @@ func runMain() error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	err := installer(ctx, *nProcs, *latestGo)
+	dir, err := os.MkdirTemp("", "")
+	if err != nil {
+		return fmt.Errorf("make temp dir: %w", err)
+	}
+	defer os.Remove(dir)
+	err = os.Chdir(dir)
+	if err != nil {
+		return fmt.Errorf("chdir: %w", err)
+	}
+
+	err = installer(ctx, *nProcs, *latestGo)
 	if err != nil {
 		return err
 	}
@@ -192,7 +205,9 @@ func runMain() error {
 func main() {
 	err := runMain()
 	if err != nil {
-		fmt.Printf("%s", err.Error())
+		if !errors.Is(err, context.Canceled) {
+			fmt.Printf("%s", err.Error())
+		}
 		os.Exit(1)
 	}
 }
