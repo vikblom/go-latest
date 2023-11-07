@@ -94,7 +94,7 @@ func latest(ctx context.Context, pkg string) (string, error) {
 	return listing.Version, nil
 }
 
-func installer(ctx context.Context, nProcs int, latestGo bool) error {
+func installer(ctx context.Context, nProcs int, latestGo, force bool) error {
 	dir := gobin()
 	if dir == "" {
 		return errors.New("GOBIN not found")
@@ -133,7 +133,7 @@ func installer(ctx context.Context, nProcs int, latestGo bool) error {
 
 			goUpgrade := latestGo && runtime.Version() != info.GoVersion
 			modUpgrade := target != info.Main.Version
-			if !goUpgrade && !modUpgrade {
+			if !(force || goUpgrade || modUpgrade) {
 				fmt.Printf("%s %s already latest\n", info.Path, info.Main.Version)
 				return nil
 			}
@@ -169,6 +169,7 @@ func runMain() error {
 	showVersion := flag.Bool("v", false, "Print version and exit")
 	nProcs := flag.Int("j", 0, "Number of parallel workers, defaults to number of CPUs")
 	latestGo := flag.Bool("go", false, "Re-install programs not built with the current version of Go")
+	force := flag.Bool("force", false, "Re-install everything")
 	flag.Parse()
 
 	if *showVersion {
@@ -195,7 +196,7 @@ func runMain() error {
 		return fmt.Errorf("chdir: %w", err)
 	}
 
-	err = installer(ctx, *nProcs, *latestGo)
+	err = installer(ctx, *nProcs, *latestGo, *force)
 	if err != nil {
 		return err
 	}
