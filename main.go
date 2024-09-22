@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"debug/buildinfo"
 	"encoding/json"
@@ -13,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -45,13 +45,27 @@ func gobin() string {
 	return ""
 }
 
+func goversion(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "go", "env", "GOVERSION")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("go env (%w):\n%s", err, out)
+	}
+
+	return string(bytes.TrimSpace(out)), nil
+}
+
 func listPrograms(dir string) ([]string, error) {
-	files, err := ioutil.ReadDir(dir)
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	var programs []string
-	for _, fi := range files {
+	for _, de := range files {
+		fi, err := de.Info()
+		if err != nil {
+			return nil, fmt.Errorf("info %q: %w", de.Name(), err)
+		}
 		if isExecutable(fi) {
 			programs = append(programs, filepath.Join(dir, fi.Name()))
 		}
@@ -104,6 +118,16 @@ func installer(ctx context.Context, nProcs int, latestGo, force bool) error {
 		return err
 	}
 
+	var goVersion string
+	// Check against the local toolchain version of Go since that is
+	// what we're going to use to install programs.
+	if latestGo {
+		goVersion, err = goversion(ctx)
+		if err != nil {
+			return fmt.Errorf("go version: %w", err)
+		}
+	}
+
 	var eg errgroup.Group
 	eg.SetLimit(nProcs)
 
@@ -131,7 +155,7 @@ func installer(ctx context.Context, nProcs int, latestGo, force bool) error {
 				target = "?"
 			}
 
-			goUpgrade := latestGo && runtime.Version() != info.GoVersion
+			goUpgrade := latestGo && goVersion != info.GoVersion
 			modUpgrade := target != info.Main.Version
 			if !(force || goUpgrade || modUpgrade) {
 				fmt.Printf("%s %s already latest\n", info.Path, info.Main.Version)
@@ -161,7 +185,7 @@ Install the latest version of go install'd programs in GOBIN.
 Options:
 `
 
-func runMain() error {
+func runMain(ctx context.Context) error {
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), help)
 		flag.PrintDefaults()
@@ -184,8 +208,6 @@ func runMain() error {
 		*nProcs = runtime.NumCPU()
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
 	dir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return fmt.Errorf("make temp dir: %w", err)
@@ -204,7 +226,10 @@ func runMain() error {
 }
 
 func main() {
-	err := runMain()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	err := runMain(ctx)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			fmt.Printf("%s", err.Error())
